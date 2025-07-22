@@ -1,0 +1,38 @@
+name: CI/CD Pipeline Node.js + TypeScript + Docker + K8s
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-test-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build TypeScript
+        run: npm run build
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v3
+        with:
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/nodejs-k8s-cicd-demo:${{ github.sha }}
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+
+      - name: Deploy to Kubernetes
+        run: |
+          sed "s|SEU-USUARIO-DOCKERHUB|${{ secrets.DOCKER_USERNAME }}|g; s|TAG|${{ github.sha }}|g" k8s/deployment.yaml | kubectl apply -f -
+          kubectl apply -f k8s/service.yaml
+        env:
+          KUBECONFIG: ${{ secrets.KUBECONFIG }}
