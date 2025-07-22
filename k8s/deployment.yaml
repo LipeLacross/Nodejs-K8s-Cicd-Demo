@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nodejs-k8s-cicd-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nodejs-k8s-cicd-demo
+  template:
+    metadata:
+      labels:
+        app: nodejs-k8s-cicd-demo
+    spec:
+      containers:
+        - name: nodejs-k8s-cicd-demo
+          image: progod/nodejs-k8s-cicd-demo:TAG
+          ports:
+            - containerPort: 3000
