@@ -3,6 +3,11 @@ name: CI/CD Pipeline Node.js + TypeScript + OKE
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  DOCKER_IMAGE: progod/nodejs-k8s-cicd-demo
 
 jobs:
   build-test-deploy:
@@ -11,17 +16,46 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: '18'
+          cache: 'npm'
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build TypeScript
         run: npm run build
+
+      - name: Validate required secrets
+        run: |
+          echo "🔍 Validating required secrets..."
+          required_secrets=(
+            "DOCKER_USERNAME:${{ secrets.DOCKER_USERNAME }}"
+            "DOCKER_PASSWORD:${{ secrets.DOCKER_PASSWORD }}"
+            "OCI_CLI_USER:${{ secrets.OCI_CLI_USER }}"
+            "OCI_CLI_TENANCY:${{ secrets.OCI_CLI_TENANCY }}"
+            "OCI_CLI_FINGERPRINT:${{ secrets.OCI_CLI_FINGERPRINT }}"
+            "OCI_CLI_KEY_CONTENT:${{ secrets.OCI_CLI_KEY_CONTENT }}"
+            "OCI_CLI_REGION:${{ secrets.OCI_CLI_REGION }}"
+            "OKE_CLUSTER_OCID:${{ secrets.OKE_CLUSTER_OCID }}"
+          )
+          
+          for secret_pair in "${required_secrets[@]}"; do
+            name="${secret_pair%%:*}"
+            value="${secret_pair##*:}"
+            if [ -z "$value" ]; then
+              echo "❌ Secret $name is missing!"
+              exit 1
+            else
+              echo "✅ Secret $name is present"
+            fi
+          done
+          echo "🎉 All secrets validated successfully!"
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -30,28 +64,105 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Build and Push Docker image
-        uses: docker/build-push-action@v3
+        uses: docker/build-push-action@v5
         with:
+          context: .
           push: true
-          tags: progod/nodejs-k8s-cicd-demo:${{ github.sha }}
+          tags: |
+            ${{ env.DOCKER_IMAGE }}:latest
+            ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Configure kubectl for OKE
-        uses: oracle-actions/configure-kubectl-oke@v1.5.0
-        with:
-          cluster: ${{ secrets.OKE_CLUSTER_OCID }}
-        env:
-          OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
-          OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
-          OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
-          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
-          OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
+      - name: Setup OCI CLI and kubectl
+        run: |
+          echo "🔧 Installing OCI CLI..."
+          python -m pip install oci-cli
+          
+          echo "📁 Creating OCI configuration..."
+          mkdir -p ~/.oci ~/.kube
+          chmod 700 ~/.oci ~/.kube
+          
+          # Write private key
+          echo "${{ secrets.OCI_CLI_KEY_CONTENT }}" > ~/.oci/oci_api_key.pem
+          chmod 600 ~/.oci/oci_api_key.pem
+          
+          # Create config file
+          cat > ~/.oci/config << EOF
+          [DEFAULT]
+          user=${{ secrets.OCI_CLI_USER }}
+          fingerprint=${{ secrets.OCI_CLI_FINGERPRINT }}
+          key_file=~/.oci/oci_api_key.pem
+          tenancy=${{ secrets.OCI_CLI_TENANCY }}
+          region=${{ secrets.OCI_CLI_REGION }}
+          EOF
+          chmod 600 ~/.oci/config
+          
+          echo "🔗 Testing OCI CLI connection..."
+          oci iam region list --output table
+          
+          echo "⚙️ Configuring kubectl for OKE..."
+          oci ce cluster create-kubeconfig \
+            --cluster-id ${{ secrets.OKE_CLUSTER_OCID }} \
+            --file ~/.kube/config \
+            --region ${{ secrets.OCI_CLI_REGION }} \
+            --token-version 2.0.0
+          
+          echo "🎯 Testing kubectl connection..."
+          kubectl cluster-info
+          kubectl get nodes
 
       - name: Deploy to Kubernetes
         run: |
-          sed "s|progod/nodejs-k8s-cicd-demo:TAG|progod/nodejs-k8s-cicd-demo:${{ github.sha }}|g" k8s/deployment.yaml | kubectl apply -f -
+          echo "🚀 Starting deployment with image: ${{ env.DOCKER_IMAGE }}:${{ github.sha }}"
+          
+          # Update deployment with new image
+          sed "s|progod/nodejs-k8s-cicd-demo:TAG|${{ env.DOCKER_IMAGE }}:${{ github.sha }}|g" k8s/deployment.yaml | kubectl apply -f -
+          
+          # Apply service
           kubectl apply -f k8s/service.yaml
-
-      - name: Verify deployment
-        run: |
+          
+          echo "⏳ Waiting for rollout to complete..."
+          kubectl rollout status deployment/nodejs-k8s-cicd-demo --timeout=300s
+          
+          echo "📊 Deployment Status:"
           kubectl get pods -l app=nodejs-k8s-cicd-demo
           kubectl get services nodejs-k8s-cicd-demo-service
+          
+          echo "✅ Deployment completed successfully!"
+
+      - name: Health check
+        run: |
+          echo "🏥 Performing health check..."
+          
+          # Get service external IP (wait up to 5 minutes)
+          for i in {1..30}; do
+            EXTERNAL_IP=$(kubectl get service nodejs-k8s-cicd-demo-service -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+            if [ -n "$EXTERNAL_IP" ] && [ "$EXTERNAL_IP" != "null" ]; then
+              echo "✅ Service external IP: $EXTERNAL_IP"
+              break
+            fi
+            echo "⏳ Waiting for external IP... (attempt $i/30)"
+            sleep 10
+          done
+          
+          # Test the health endpoint if we have an external IP
+          if [ -n "$EXTERNAL_IP" ] && [ "$EXTERNAL_IP" != "null" ]; then
+            echo "🔍 Testing health endpoint..."
+            for i in {1..5}; do
+              if curl -f -m 10 "http://$EXTERNAL_IP/tarefas" > /dev/null 2>&1; then
+                echo "✅ Health check passed!"
+                break
+              else
+                echo "⏳ Health check attempt $i/5 failed, retrying..."
+                sleep 10
+              fi
+            done
+          else
+            echo "⚠️ External IP not yet available, skipping external health check"
+          fi
+          
+          # Always check pod health
+          echo "🔍 Checking pod health..."
+          kubectl get pods -l app=nodejs-k8s-cicd-demo
+          kubectl describe pods -l app=nodejs-k8s-cicd-demo | grep -E "(Status|Ready|Conditions)" || true

@@ -2,8 +2,15 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: nodejs-k8s-cicd-demo
+  labels:
+    app: nodejs-k8s-cicd-demo
 spec:
   replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app: nodejs-k8s-cicd-demo
@@ -17,6 +24,7 @@ spec:
           image: progod/nodejs-k8s-cicd-demo:TAG
           ports:
             - containerPort: 3000
+              name: http
           resources:
             requests:
               memory: "128Mi"
@@ -24,3 +32,26 @@ spec:
             limits:
               memory: "256Mi"
               cpu: "200m"
+          # Health checks
+          livenessProbe:
+            httpGet:
+              path: /tarefas
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /tarefas
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # Environment variables
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: PORT
+              value: "3000"
