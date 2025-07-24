@@ -38,6 +38,28 @@ app.delete('/tarefas/:id', (req: Request, res: Response) => {
   tarefas = tarefas.filter(t => t.id !== id);
   res.status(204).send();
 });
+// UPDATE completo - editar título e status
+app.put('/tarefas/:id', (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const { titulo, concluida } = req.body;
 
+  const tarefa = tarefas.find(t => t.id === id);
+  if (!tarefa) return res.status(404).json({ erro: 'Tarefa não encontrada' });
+
+  if (titulo !== undefined) tarefa.titulo = titulo;
+  if (concluida !== undefined) tarefa.concluida = concluida;
+
+  res.json(tarefa);
+});
+
+// Marcar como concluída (endpoint separado)
+app.patch('/tarefas/:id/concluir', (req: Request, res: Response) => {
+  const id = Number(req.params.id);
+  const tarefa = tarefas.find(t => t.id === id);
+  if (!tarefa) return res.status(404).json({ erro: 'Tarefa não encontrada' });
+
+  tarefa.concluida = true;
+  res.json(tarefa);
+});
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`API de tarefas rodando na porta ${PORT}`));
