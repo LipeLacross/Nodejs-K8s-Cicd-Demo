@@ -1,3 +1,4 @@
+# Build stage
 FROM node:18-alpine AS builder
 
 WORKDIR /app
@@ -5,10 +6,10 @@ WORKDIR /app
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci --only=production && npm cache clean --force
+# Install ALL dependencies (including devDependencies for build)
+RUN npm ci --include=dev
 
-# Copy source code
+# Copy source code and config
 COPY tsconfig.json ./
 COPY src ./src
 
@@ -20,16 +21,21 @@ FROM node:18-alpine AS production
 
 WORKDIR /app
 
-# Copy package files and install only production dependencies
+# Copy package files
 COPY package*.json ./
+
+# Install only production dependencies
 RUN npm ci --only=production && npm cache clean --force
 
 # Copy built application from builder stage
 COPY --from=builder /app/dist ./dist
 
-# Create non-root user
+# Create non-root user for security
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001
+
+# Change ownership of app directory
+RUN chown -R nodejs:nodejs /app
 
 USER nodejs
 
