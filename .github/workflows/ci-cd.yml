@@ -63,6 +63,10 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
+      # ✅ CORREÇÃO: Adicionar Docker Buildx setup
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build and Push Docker image
         uses: docker/build-push-action@v5
         with:
@@ -166,3 +170,20 @@ jobs:
           echo "🔍 Checking pod health..."
           kubectl get pods -l app=nodejs-k8s-cicd-demo
           kubectl describe pods -l app=nodejs-k8s-cicd-demo | grep -E "(Status|Ready|Conditions)" || true
+
+      - name: Deployment Summary
+        if: always()
+        run: |
+          echo "📋 === DEPLOYMENT SUMMARY ==="
+          echo "🏷️ Image deployed: ${{ env.DOCKER_IMAGE }}:${{ github.sha }}"
+          echo "🔧 Workflow status: ${{ job.status }}"
+          echo "📅 Deployment time: $(date)"
+          echo "🌍 Cluster region: ${{ secrets.OCI_CLI_REGION }}"
+          
+          # Show final status
+          echo "📊 Final cluster status:"
+          kubectl get all -l app=nodejs-k8s-cicd-demo || echo "❌ Could not get cluster status"
+          
+          # Show recent events
+          echo "📰 Recent cluster events:"
+          kubectl get events --sort-by='.lastTimestamp' | tail -10 || echo "❌ Could not get events"
