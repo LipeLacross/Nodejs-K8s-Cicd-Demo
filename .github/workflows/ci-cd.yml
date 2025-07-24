@@ -1,4 +1,4 @@
-name: CI/CD Pipeline Node.js + TypeScript + Docker + K8s
+name: CI/CD Pipeline Node.js + TypeScript + OKE
 
 on:
   push:
@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout do código
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Node.js
@@ -17,32 +17,41 @@ jobs:
         with:
           node-version: 18
 
-      - name: Instalar dependências
+      - name: Install dependencies
         run: npm install
 
-      - name: Compilar TypeScript
+      - name: Build TypeScript
         run: npm run build
 
-      - name: Login no Docker Hub
+      - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build e Push da imagem Docker
+      - name: Build and Push Docker image
         uses: docker/build-push-action@v3
         with:
           push: true
           tags: progod/nodejs-k8s-cicd-demo:${{ github.sha }}
 
-      - name: Configurar kubectl
-        uses: azure/setup-kubectl@v3
+      - name: Configure kubectl for OKE
+        uses: oracle-actions/configure-kubectl-oke@v1.5.0
         with:
-          version: 'v1.29.0'
-
-      - name: Deploy para Kubernetes
+          cluster: ${{ secrets.OKE_CLUSTER_OCID }}
         env:
-          KUBECONFIG: ${{ secrets.KUBECONFIG }}
+          OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+          OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+          OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+          OCI_CLI_REGION: ${{ secrets.OCI_CLI_REGION }}
+
+      - name: Deploy to Kubernetes
         run: |
           sed "s|progod/nodejs-k8s-cicd-demo:TAG|progod/nodejs-k8s-cicd-demo:${{ github.sha }}|g" k8s/deployment.yaml | kubectl apply -f -
           kubectl apply -f k8s/service.yaml
+
+      - name: Verify deployment
+        run: |
+          kubectl get pods -l app=nodejs-k8s-cicd-demo
+          kubectl get services nodejs-k8s-cicd-demo-service
